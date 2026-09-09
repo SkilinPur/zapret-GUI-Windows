@@ -10,7 +10,6 @@
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -230,46 +229,6 @@ class WinBackend(Backend):
 
     # ------------------------------------------------------------- запуск winws
 
-    @staticmethod
-    def _bat_commands(path: Path):
-        """Разбирает .bat Flowseal: возвращает списки аргументов winws."""
-        raw = path.read_text(encoding="utf-8", errors="replace").replace("\r", "")
-        logical = []
-        cur = ""
-        for line in raw.splitlines():
-            s = line.rstrip()
-            if s.endswith("^"):
-                cur += s[:-1] + " "
-            else:
-                cur += s
-                logical.append(cur)
-                cur = ""
-        if cur.strip():
-            logical.append(cur)
-
-        cmds = []
-        for stmt in logical:
-            stmt = stmt.strip()
-            m = re.search(r"\bwinws\b(.*)", stmt)
-            if not m:
-                continue
-            rest = m.group(1)
-            cut = len(rest)
-            low = rest.lower()
-            for kw in ("if errorlevel", "&&", "goto ", "if %errorlevel%"):
-                i = low.find(kw)
-                if i != -1:
-                    cut = min(cut, i)
-            rest = rest[:cut].strip()
-            if not rest:
-                continue
-            try:
-                args = shlex.split(rest, posix=False)
-            except ValueError:
-                args = rest.split()
-            cmds.append(args)
-        return cmds
-
     def state(self) -> bool:
         if any(i["proc"].poll() is None for i in self._proc_infos):
             return True
@@ -302,6 +261,24 @@ class WinBackend(Backend):
                     log("    " + line)
         return reported
 
+    def _runner(self, strategy: str) -> Path:
+        """Готовит копию .bat, которая запускает winws в «фоне» (без start /min
+        и лишних вызовов service.bat), в той же папке engine (чтобы %~dp0,
+        %BIN%/%LISTS% и user-списки работали как в оригинале)."""
+        src = self.engine / strategy
+        raw = src.read_text(encoding="utf-8", errors="replace")
+        text = raw.replace("\r", "")
+        # Убираем не нужные нам вызовы (проверки/обновления самих себя)
+        for call in ("call service.bat status_zapret", "call service.bat check_updates"):
+            text = re.sub(rf"(?m)^\s*{re.escape(call)}\s*$", "", text)
+        # winws запускаем в текущей консоли, а не через start /min
+        text = re.sub(r"^[^\n]*?\bwinws\.exe\"", '"%BIN%winws.exe"', text, count=1,
+                      flags=re.M)
+        slug = re.sub(r"[^\w\-]+", "_", Path(strategy).stem).strip("_") or "strat"
+        runner = self.engine / f".gui-{slug}.bat"
+        runner.write_text(text.replace("\n", "\r\n"), encoding="utf-8")
+        return runner
+
     def start(self, strategy: str, log=None) -> bool:
         self._log = log
         if self.state():
@@ -315,39 +292,38 @@ class WinBackend(Backend):
         if not bat.exists():
             self._emit(f"! стратегия не найдена: {strategy}")
             return False
+
         try:
-            cmds = self._bat_commands(bat)
+            runner = self._runner(strategy)
         except Exception as exc:
-            self._emit(f"! не удалось разобрать .bat: {exc}")
-            return False
-        if not cmds:
-            self._emit("! в стратегии не найдено команд winws")
+            self._emit(f"! не удалось подготовить запуск: {exc}")
             return False
 
         self.logs_dir.mkdir(exist_ok=True)
         stamp = time.strftime("%Y%m%d-%H%M%S")
+        logpath = self.logs_dir / f"winws-{stamp}.log"
+        try:
+            fh = open(logpath, "a", encoding="utf-8", errors="replace")
+        except Exception as exc:
+            self._emit(f"! не открыть лог {logpath}: {exc}")
+            return False
+
         self._proc_infos = []
-        self._emit(f"> запуск обхода ({strategy}), процессов: {len(cmds)}")
-        for idx, args in enumerate(cmds, 1):
-            logpath = self.logs_dir / f"winws-{idx}-{stamp}.log"
-            try:
-                fh = open(logpath, "a", encoding="utf-8", errors="replace")
-            except Exception as exc:
-                self._emit(f"! не открыть лог {logpath}: {exc}")
-                continue
-            try:
-                proc = subprocess.Popen(
-                    [str(w), *args],
-                    cwd=str(self.engine),
-                    stdout=fh, stderr=subprocess.STDOUT,
-                    creationflags=CREATE_NO_WINDOW,
-                )
-            except Exception as exc:
-                fh.close()
-                self._emit(f"! ошибка запуска winws: {exc}")
-                continue
-            self._proc_infos.append({"proc": proc, "log": logpath, "acked": False})
-            self._emit(f"> winws {idx} запущен (pid {proc.pid}) — лог: {logpath.name}")
+        self._emit(f"> запуск обхода ({strategy})…")
+        try:
+            proc = subprocess.Popen(
+                ["cmd", "/c", str(runner)],
+                cwd=str(self.engine),
+                stdout=fh, stderr=subprocess.STDOUT,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except Exception as exc:
+            fh.close()
+            self._emit(f"! ошибка запуска: {exc}")
+            return False
+        self._proc_infos.append({"proc": proc, "log": logpath,
+                                 "runner": runner, "acked": False})
+        self._emit(f"> запущено (pid {proc.pid}) — лог: {logpath.name}")
         return self.state()
 
     def stop(self, log=None) -> bool:
@@ -359,6 +335,12 @@ class WinBackend(Backend):
             if proc.poll() is None:
                 try:
                     proc.terminate()
+                except Exception:
+                    pass
+            runner = info.get("runner")
+            if runner and runner.exists():
+                try:
+                    runner.unlink()
                 except Exception:
                     pass
         self._proc_infos = []
