@@ -8,6 +8,5 @@ bin/
 config.json
 .flowseal.zip
 .flowseal-src/
-*.spec
 release/
 *.log
