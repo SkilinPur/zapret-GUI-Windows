@@ -5,6 +5,8 @@ build/
 dist/
 strategies/
 bin/
+engine/
+.engine-*
 config.json
 .flowseal.zip
 .flowseal-src/

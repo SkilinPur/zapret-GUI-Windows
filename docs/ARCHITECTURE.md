@@ -7,11 +7,13 @@ Windows — отдельный репозиторий `SkilinPur/zapret-GUI-Wind
 
 Переносим **GUI-концепт** (вкладки, мастер, обновление модулей, тёмная тема,
 трей) с Linux на Windows. GUI-слой — чистый PySide6, он кроссплатформенный.
-Меняется только **бэкенд**: всё, что на Linux делал `service.sh` + `nfqws` +
-nftables + sudo/systemd, на Windows делает **winws.exe + WinDivert + UAC +
-планировщик задач**.
+Подход — **как в Linux-версии**: GUI не содержит движок, а оборачивает готовый
+пакет [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube)
+(релиз-пакет: `.bat`-стратегии + `lists/` + `bin/` с winws.exe и WinDivert).
+GUI скачивает/обновляет этот пакет в `engine/` и запускает из него winws —
+аналогично тому, как Linux-GUI управляет портом через `service.sh`.
 
-Важно: не тянем внутрь bash-адаптер. На Windows это прямой Python-бэкенд.
+Меняется только «адаптер», вокруг которого строится GUI.
 
 ## 2. Стек и внешние зависимости
 
@@ -99,15 +101,15 @@ nftables + sudo/systemd, на Windows делает **winws.exe + WinDivert + UAC
 ## 6. Структура репозитория (целевая)
 
 ```
-gui/                  # общий PySide6-слой (скопирован из Linux-GUI)
+gui/                  # общий PySide6-слой (перенесён из Linux-GUI)
   app/
-    ui/…              # вкладки (status/config/update/wizard/help/…)
+    ui/…              # вкладки (status/config/update/help/…)
     theme.py, tray.py, window.py
     backend.py        # интерфейс Backend
-    win_backend.py    # реализация для Windows (winws+WinDivert)
+    win_backend.py    # обёртка над пакетом Flowseal (winws+WinDivert)
     mock_backend.py   # заглушка для разработки на Linux
-strategies/           # .bat + lists + bin (от Flowseal)
-bin/                  # winws.exe, WinDivert (не в git, качаются)
+engine/               # распакованный пакет Flowseal (не в git, качается):
+                      #   *.bat стратегии, lists/, bin/ (winws.exe, WinDivert, шаблоны)
 service/              # планировщик задач / автозапуск helpers
 build/                # PyInstaller spec, .github/workflows
 ```

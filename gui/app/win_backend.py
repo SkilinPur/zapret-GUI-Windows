@@ -1,12 +1,17 @@
 # =============================================================================
-# Windows-бэкенд: winws.exe + WinDivert, стратегии Flowseal, планировщик задач
+# Windows-бэкенд: GUI-обёртка над пакетом Flowseal/zapret-discord-youtube
+#
+# Пакет Flowseal (релиз) самодостаточен: .bat-стратегии + lists/ + bin/
+# (winws.exe, WinDivert, шаблоны). Мы качаем релиз и раскладываем его в
+# engine/ — как Linux-GUI оборачивает порт. Всё остальное (запуск winws,
+# статус, автозапуск) — вокруг этого пакета.
 # =============================================================================
 
-import io
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -15,15 +20,14 @@ import zipfile
 from pathlib import Path
 
 from .backend import (
-    APP_VERSION, Backend, GITHUB_REPO, GITHUB_URL, STRATEGIES_REPO, CORE_REPO,
-    app_root, read_json, strategy_description_from_bat, write_json,
+    APP_VERSION, Backend, STRATEGIES_REPO, app_root, read_json,
+    strategy_description_from_bat, write_json,
 )
 
 CREATE_NO_WINDOW = 0x08000000
-
 _AUTH_HEADERS = {"User-Agent": f"zapret-gui/{APP_VERSION}"}
 CONFIG_NAME = "config.json"
-STRAT_MARK = ".strategies-rev"
+ENGINE_MARK = ".engine-version"
 LOG_TAIL = 12
 
 
@@ -41,23 +45,12 @@ def _tail(path: Path, n: int = LOG_TAIL):
     return lines[-n:]
 
 
-def _download(url, dest: Path):
-    req = urllib.request.Request(url, headers=_AUTH_HEADERS)
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        dest.write_bytes(resp.read())
-
-
-def _short(rev):
-    return rev if not rev else rev[:10]
-
-
 class WinBackend(Backend):
     name = "windows"
 
     def __init__(self):
         self.root = app_root()
-        self.strategies_dir = self.root / "strategies"
-        self.bin_dir = self.root / "bin"
+        self.engine = self.root / "engine"          # распакованный пакет Flowseal
         self.config_file = self.root / CONFIG_NAME
         self.logs_dir = self.root / "logs"
         self._proc_infos = []      # [{proc, log}]
@@ -66,7 +59,7 @@ class WinBackend(Backend):
     # ------------------------------------------------------------- пути
 
     def _winws(self) -> Path:
-        return self.bin_dir / "winws.exe"
+        return self.engine / "bin" / "winws.exe"
 
     def _emit(self, line):
         if self._log:
@@ -97,158 +90,140 @@ class WinBackend(Backend):
     # ------------------------------------------------------------- стратегии
 
     def strategies(self):
-        names = []
-        if self.strategies_dir.is_dir():
-            names = sorted(f.name for f in self.strategies_dir.glob("*.bat"))
-        # general.bat первым
+        if not self.engine.is_dir():
+            return []
+        names = sorted(f.name for f in self.engine.glob("*.bat"))
         names.sort(key=lambda n: (n.lower() != "general.bat", n.lower()))
         return names
 
     def strategy_description(self, name: str) -> str:
-        p = self.strategies_dir / name
+        p = self.engine / name
         return strategy_description_from_bat(p, name) if p.exists() else ""
 
-    # ------------------------------------------------------------- загрузка Flowseal
+    # ------------------------------------------------------------- пакет Flowseal
 
-    def _flowseal_zip(self) -> Path:
-        return self.root / ".flowseal.zip"
-
-    def _fetch_flowseal(self, log) -> bool:
-        """Качает и распаковывает Flowseal main в strategies/.win-src."""
-        url = f"https://codeload.github.com/{STRATEGIES_REPO}/zip/refs/heads/main"
+    @staticmethod
+    def _latest_tag():
         try:
-            self._emit("> скачивание Flowseal (стратегии + winws + WinDivert)…")
-            _download(url, self._flowseal_zip())
+            data = _http_json(f"https://api.github.com/repos/{STRATEGIES_REPO}/releases/latest")
+            return data.get("tag_name", "") or ""
+        except Exception:
+            return ""
+
+    def _install_package(self, log=None) -> bool:
+        """Качает последний релиз Flowseal и раскладывает в engine/."""
+        tag = self._latest_tag()
+        if not tag:
+            if log:
+                log("! не удалось определить версию пакета Flowseal")
+            return False
+        url = (f"https://github.com/{STRATEGIES_REPO}/releases/download/"
+               f"{tag}/zapret-discord-youtube-{tag}.zip")
+        zpath = self.root / ".engine.zip"
+        if log:
+            log(f"> скачивание пакета Flowseal {tag}…")
+        try:
+            req = urllib.request.Request(url, headers=_AUTH_HEADERS)
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                zpath.write_bytes(resp.read())
         except Exception as exc:
             if log:
                 log(f"! ошибка скачивания: {exc}")
             return False
-        src = self.root / ".flowseal-src"
-        if src.exists():
-            import shutil
-            shutil.rmtree(src, ignore_errors=True)
-        src.mkdir()
+
+        tmp = self.root / ".engine-src"
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
         try:
-            with zipfile.ZipFile(self._flowseal_zip()) as z:
-                z.extractall(src)
+            with zipfile.ZipFile(zpath) as z:
+                z.extractall(tmp)
         except Exception as exc:
             if log:
                 log(f"! ошибка распаковки: {exc}")
+            shutil.rmtree(tmp, ignore_errors=True)
             return False
-        # единственная верхняя папка репо
-        for child in src.iterdir():
-            if child.is_dir():
-                return child
-        return None
 
-    def _rev_from_flowseal(self):
+        src = next((p for p in tmp.iterdir() if p.is_dir()), None)
+        if src is None:
+            if log:
+                log("! в архиве пакета нет содержимого")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return False
+
+        old = self.root / ".engine-old"
+        if self.engine.exists():
+            if old.exists():
+                shutil.rmtree(old, ignore_errors=True)
+            self.engine.rename(old)
         try:
-            info = _http_json(f"https://api.github.com/repos/{STRATEGIES_REPO}/commits/main?per_page=1")
-            return info.get("sha", "")
-        except Exception:
-            return ""
-
-    def _apply_strategies(self, repo: Path, log):
-        dest = self.strategies_dir
-        dest.mkdir(exist_ok=True)
-        for p in repo.glob("*.bat"):
-            (dest / p.name).write_bytes(p.read_bytes())
-        lists_dir = dest / "lists"
-        lists_dir.mkdir(exist_ok=True)
-        for p in (repo / "lists").glob("*.txt"):
-            (lists_dir / p.name).write_bytes(p.read_bytes())
-        bin_dir = dest / "bin"
-        bin_dir.mkdir(exist_ok=True)
-        for p in (repo / "bin").glob("*.bin"):
-            (bin_dir / p.name).write_bytes(p.read_bytes())
-        rev = self._rev_from_flowseal()
-        if rev:
-            (self.root / STRAT_MARK).write_text(rev, encoding="utf-8")
+            src.rename(self.engine)
+        except Exception as exc:
+            if old.exists():
+                old.rename(self.engine)
+            if log:
+                log(f"! не удалось разложить пакет: {exc}")
+            shutil.rmtree(tmp, ignore_errors=True)
+            return False
+        if old.exists():
+            shutil.rmtree(old, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+        (self.root / ENGINE_MARK).write_text(tag, encoding="utf-8")
+        if log:
+            log(f"> пакет Flowseal {tag} установлен в engine/")
         return True
 
     def strategies_installed(self) -> str:
-        m = self.root / STRAT_MARK
-        if m.exists():
-            return m.read_text(encoding="utf-8").strip()
-        return ""
+        m = self.root / ENGINE_MARK
+        return m.read_text(encoding="utf-8").strip() if m.exists() else ""
 
     def strategies_latest(self) -> str:
-        return self._rev_from_flowseal()
+        return self._latest_tag()
 
     def download_strategies(self, log=None) -> bool:
         self._log = log
-        repo = self._fetch_flowseal(log)
-        if not repo:
-            return False
-        ok = self._apply_strategies(repo, log)
-        self._emit("> стратегии обновлены")
-        return ok
+        return self._install_package(log)
 
-    # ------------------------------------------------------------- ядро winws
-
-    def _apply_core(self, repo: Path, log):
-        self.bin_dir.mkdir(exist_ok=True)
-        bins = {"winws.exe", "WinDivert64.sys", "WinDivert.dll", "cygwin1.dll"}
-        copied = []
-        for p in repo.rglob("*"):
-            if p.is_file() and p.name in bins:
-                target = self.bin_dir / p.name
-                target.write_bytes(p.read_bytes())
-                copied.append(p.name)
-        if "winws.exe" not in copied:
-            if log:
-                log("! winws.exe не найден в пакете Flowseal")
-            return False
-        return True
+    # ------------------------------------------------------------- ядро (в пакете)
 
     def core_installed(self) -> str:
-        w = self._winws()
-        if not w.exists():
+        if not self._winws().exists():
             return ""
+        ver = ""
         try:
-            p = subprocess.run([str(w), "--version"], capture_output=True,
+            p = subprocess.run([str(self._winws()), "--version"], capture_output=True,
                                text=True, timeout=15, errors="replace")
             out = (p.stdout or "") + (p.stderr or "")
-            for line in out.splitlines():
-                if "version" in line.lower():
-                    return line.strip()
+            ver = next((ln.strip() for ln in out.splitlines()
+                        if "version" in ln.lower()), "")
         except Exception:
             pass
-        return ""
+        tag = self.strategies_installed()
+        return ver or (f"Flowseal {tag}" if tag else "установлено")
 
     def core_latest(self) -> str:
-        # Ядро ставим из пакета Flowseal — точную версию отдельно не выводим.
         return ""
 
     def download_core(self, log=None) -> bool:
         self._log = log
-        repo = self._fetch_flowseal(log)
-        if not repo:
-            return False
-        ok = self._apply_core(repo, log)
-        if ok:
-            self._emit("> ядро (winws + WinDivert) готово")
-        return ok
+        # winws+WinDivert входят в пакет Flowseal — ставим тем же пакетом
+        return self._install_package(log)
 
     # ------------------------------------------------------------- программа
 
     def program_latest(self):
         try:
-            data = _http_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
-            tag = data.get("tag_name", "") or ""
-            notes = data.get("body", "") or ""
-            return tag, notes
+            data = _http_json("https://api.github.com/repos/SkilinPur/zapret-GUI-Windows/releases/latest")
+            return (data.get("tag_name", "") or ""), (data.get("body", "") or "")
         except Exception:
             return "", ""
 
     def update_program(self, log=None) -> bool:
-        # Первая версия: открываем страницу релизов — пользователь скачивает exe.
         if log:
-            log("> самообновление появится в следующей версии.")
-            log(f"> открываю страницу релизов: {GITHUB_URL}/releases/latest")
+            log("> самообновление программы появится позже. Открываю страницу релизов…")
         try:
             import webbrowser
-            webbrowser.open(f"{GITHUB_URL}/releases/latest")
+            webbrowser.open("https://github.com/SkilinPur/zapret-GUI-Windows/releases/latest")
         except Exception:
             pass
         return False
@@ -259,7 +234,6 @@ class WinBackend(Backend):
     def _bat_commands(path: Path):
         """Разбирает .bat Flowseal: возвращает списки аргументов winws."""
         raw = path.read_text(encoding="utf-8", errors="replace").replace("\r", "")
-        # склейка строк с переносом '^'
         logical = []
         cur = ""
         for line in raw.splitlines():
@@ -280,7 +254,6 @@ class WinBackend(Backend):
             if not m:
                 continue
             rest = m.group(1)
-            # обрезаем хвост вроде "if errorlevel", "goto", "&&"
             cut = len(rest)
             low = rest.lower()
             for kw in ("if errorlevel", "&&", "goto ", "if %errorlevel%"):
@@ -298,10 +271,8 @@ class WinBackend(Backend):
         return cmds
 
     def state(self) -> bool:
-        # оставшиеся после нас процессы
         if any(i["proc"].poll() is None for i in self._proc_infos):
             return True
-        # и любые winws в системе (например, запущенный ранее)
         if os.name == "nt":
             try:
                 p = subprocess.run(
@@ -315,12 +286,6 @@ class WinBackend(Backend):
         return False
 
     def explain(self, log=None):
-        """Выводит в лог причины остановки завершившихся winws-процессов.
-
-        Вызывается из «Статуса» периодически и после запуска: если процесс
-        упал сам (не был остановлен пользователем) — показывает код выхода и
-        хвост его лог-файла. Возвращает True, если что-то выведено.
-        """
         reported = False
         for info in self._proc_infos:
             proc, path = info["proc"], info["log"]
@@ -344,9 +309,9 @@ class WinBackend(Backend):
             return False
         w = self._winws()
         if not w.exists():
-            self._emit("! winws.exe не найден — скачайте ядро (вкладка «Обновление»)")
+            self._emit("! пакет не установлен — откройте «Обновление» и скачайте ядро/стратегии")
             return False
-        bat = self.strategies_dir / strategy
+        bat = self.engine / strategy
         if not bat.exists():
             self._emit(f"! стратегия не найдена: {strategy}")
             return False
@@ -373,7 +338,7 @@ class WinBackend(Backend):
             try:
                 proc = subprocess.Popen(
                     [str(w), *args],
-                    cwd=str(self.strategies_dir),
+                    cwd=str(self.engine),
                     stdout=fh, stderr=subprocess.STDOUT,
                     creationflags=CREATE_NO_WINDOW,
                 )
@@ -389,7 +354,7 @@ class WinBackend(Backend):
         self._log = log
         self._emit("> остановка обхода")
         for info in self._proc_infos:
-            info["acked"] = True   # штатная остановка — причину не показываем
+            info["acked"] = True
             proc = info["proc"]
             if proc.poll() is None:
                 try:
