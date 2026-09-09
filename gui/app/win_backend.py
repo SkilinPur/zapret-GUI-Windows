@@ -407,6 +407,12 @@ class WinBackend(Backend):
         for info in self._proc_infos:
             info["acked"] = True
             proc = info["proc"]
+            pid = proc.pid if proc.pid else 0
+            if proc.poll() is None and os.name == "nt" and pid:
+                # убиваем всё дерево, запущенное через cmd (в т.ч. winws-потомка)
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                               capture_output=True, text=True, timeout=15,
+                               creationflags=CREATE_NO_WINDOW)
             if proc.poll() is None:
                 try:
                     proc.terminate()
@@ -423,8 +429,18 @@ class WinBackend(Backend):
             subprocess.run(["taskkill", "/F", "/IM", "winws.exe"],
                            capture_output=True, text=True, timeout=15,
                            creationflags=CREATE_NO_WINDOW)
-        self._emit("> остановлен")
-        return True
+        self._emit("> проверка остановки…")
+        for _ in range(6):  # до ~3 секунд ждём, пока winws действительно исчезнет
+            if not self.state():
+                break
+            time.sleep(0.5)
+        if self.state():
+            self._emit("! winws всё ещё работает")
+            self._emit("! возможно, он запущен вне программы или работает как служба")
+            self._emit('! вручную: taskkill /F /IM winws.exe  (или перезагрузите ПК)')
+        else:
+            self._emit("> остановлен")
+        return not self.state()
 
     # ------------------------------------------------------------- самопроверка / сервис
 
