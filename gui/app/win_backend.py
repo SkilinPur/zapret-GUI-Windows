@@ -54,6 +54,8 @@ class WinBackend(Backend):
         self.logs_dir = self.root / "logs"
         self._proc_infos = []      # [{proc, log}]
         self._log = lambda _line: None
+        self._task_cache = {}      # имя -> (время, bool)
+        self._core_cache = (0.0, "")
 
     # ------------------------------------------------------------- пути
 
@@ -261,19 +263,25 @@ class WinBackend(Backend):
     # ------------------------------------------------------------- ядро (в пакете)
 
     def core_installed(self) -> str:
+        now = time.monotonic()
+        if now - self._core_cache[0] < 30 and self._core_cache[1]:
+            return self._core_cache[1]
         if not self._winws().exists():
             return ""
         ver = ""
         try:
             p = subprocess.run([str(self._winws()), "--version"], capture_output=True,
-                               text=True, timeout=15, errors="replace")
+                               text=True, timeout=8, errors="replace",
+                               creationflags=CREATE_NO_WINDOW)
             out = (p.stdout or "") + (p.stderr or "")
             ver = next((ln.strip() for ln in out.splitlines()
                         if "version" in ln.lower()), "")
         except Exception:
             pass
         tag = self.strategies_installed()
-        return ver or (f"Flowseal {tag}" if tag else "установлено")
+        result = ver or (f"Flowseal {tag}" if tag else "установлено")
+        self._core_cache = (now, result)
+        return result
 
     def core_latest(self) -> str:
         return ""
@@ -304,20 +312,30 @@ class WinBackend(Backend):
 
     # ------------------------------------------------------------- запуск winws
 
-    def state(self) -> bool:
-        if any(i["proc"].poll() is None for i in self._proc_infos):
-            return True
+    def _tasklist(self, image: str, ttl: float = 1.0) -> bool:
+        """Проверка процесса через tasklist с коротким кэшем (не грузим UI)."""
+        now = time.monotonic()
+        hit = self._task_cache.get(image)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+        res = False
         if os.name == "nt":
             try:
                 p = subprocess.run(
-                    ["tasklist", "/FI", "IMAGENAME eq winws.exe"],
-                    capture_output=True, text=True, timeout=15,
+                    ["tasklist", "/FI", f"IMAGENAME eq {image}"],
+                    capture_output=True, text=True, timeout=8,
                     creationflags=CREATE_NO_WINDOW,
                 )
-                return "winws.exe" in (p.stdout or "")
+                res = image in (p.stdout or "")
             except Exception:
-                return False
-        return False
+                res = False
+        self._task_cache[image] = (now, res)
+        return res
+
+    def state(self) -> bool:
+        if any(i["proc"].poll() is None for i in self._proc_infos):
+            return True
+        return self._tasklist("winws.exe")
 
     def explain(self, log=None):
         reported = False
@@ -429,9 +447,10 @@ class WinBackend(Backend):
             subprocess.run(["taskkill", "/F", "/IM", "winws.exe"],
                            capture_output=True, text=True, timeout=15,
                            creationflags=CREATE_NO_WINDOW)
+        self._task_cache.pop("winws.exe", None)
         self._emit("> проверка остановки…")
         for _ in range(6):  # до ~3 секунд ждём, пока winws действительно исчезнет
-            if not self.state():
+            if not self._tasklist("winws.exe", 0.0):
                 break
             time.sleep(0.5)
         if self.state():
@@ -552,15 +571,7 @@ class WinBackend(Backend):
             return False
 
     def telegram_running(self) -> bool:
-        if os.name != "nt":
-            return False
-        try:
-            p = subprocess.run(["tasklist", "/FI", "IMAGENAME eq TgWsProxy.exe"],
-                               capture_output=True, text=True, timeout=15,
-                               creationflags=CREATE_NO_WINDOW)
-            return "TgWsProxy.exe" in (p.stdout or "")
-        except Exception:
-            return False
+        return self._tasklist("TgWsProxy.exe")
 
     def telegram_start(self, log=None) -> bool:
         self._log = log
@@ -573,6 +584,7 @@ class WinBackend(Backend):
             return False
         try:
             subprocess.Popen([str(exe)])
+            self._task_cache.pop("TgWsProxy.exe", None)
             self._emit("> запущен Tg WS Proxy (окно настроек)…")
             return True
         except Exception as exc:
@@ -581,11 +593,11 @@ class WinBackend(Backend):
 
     def telegram_stop(self, log=None) -> bool:
         self._log = log
-        if os.name != "nt":
-            return False
-        subprocess.run(["taskkill", "/F", "/IM", "TgWsProxy.exe"],
-                       capture_output=True, text=True, timeout=15,
-                       creationflags=CREATE_NO_WINDOW)
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/IM", "TgWsProxy.exe"],
+                           capture_output=True, text=True, timeout=15,
+                           creationflags=CREATE_NO_WINDOW)
+        self._task_cache.pop("TgWsProxy.exe", None)
         self._emit("> Tg WS Proxy остановлен")
         return True
 
