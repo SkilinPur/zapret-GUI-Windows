@@ -19,6 +19,7 @@ class StatusTab(QWidget):
         super().__init__(parent)
         self.b = backend
         self._job = None
+        self._was_running = None
         self._build_ui()
 
         self._timer = QTimer(self)
@@ -105,12 +106,25 @@ class StatusTab(QWidget):
         self._job = None
         self._busy(False)
         self.refresh()
+        # Проверяем через 1.5 с: не упал ли winws сразу после запуска
+        QTimer.singleShot(1500, self._maybe_explain)
+
+    def _maybe_explain(self):
+        try:
+            self.b.explain(self.append_log)
+        except Exception:
+            pass
+        self.refresh()
 
     def on_show(self):
         self.refresh()
 
     def refresh(self):
         running = self.b.state()
+        # Переход «работал → упал»: выводим причину (код выхода + лог)
+        if self._was_running is True and not running:
+            self._maybe_explain()
+        self._was_running = running
         if running:
             self.state_label.setText("[СТАТУС: РАБОТАЕТ]")
             self.state_label.setStyleSheet(f"color: {_RUN};")

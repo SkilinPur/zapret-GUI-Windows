@@ -86,6 +86,9 @@ class MockBackend(Backend):
         self._emit(f"> mock: запуск обхода ({strategy})")
         return True
 
+    def explain(self, log=None):
+        return False
+
     def stop(self, log=None):
         self._log = log
         self._running = False

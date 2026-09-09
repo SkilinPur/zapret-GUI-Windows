@@ -9,6 +9,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -23,12 +24,21 @@ CREATE_NO_WINDOW = 0x08000000
 _AUTH_HEADERS = {"User-Agent": f"zapret-gui/{APP_VERSION}"}
 CONFIG_NAME = "config.json"
 STRAT_MARK = ".strategies-rev"
+LOG_TAIL = 12
 
 
 def _http_json(url):
     req = urllib.request.Request(url, headers=_AUTH_HEADERS)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def _tail(path: Path, n: int = LOG_TAIL):
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return []
+    return lines[-n:]
 
 
 def _download(url, dest: Path):
@@ -49,7 +59,8 @@ class WinBackend(Backend):
         self.strategies_dir = self.root / "strategies"
         self.bin_dir = self.root / "bin"
         self.config_file = self.root / CONFIG_NAME
-        self._procs = []
+        self.logs_dir = self.root / "logs"
+        self._proc_infos = []      # [{proc, log}]
         self._log = lambda _line: None
 
     # ------------------------------------------------------------- пути
@@ -288,7 +299,7 @@ class WinBackend(Backend):
 
     def state(self) -> bool:
         # оставшиеся после нас процессы
-        if any(p.poll() is None for p in self._procs):
+        if any(i["proc"].poll() is None for i in self._proc_infos):
             return True
         # и любые winws в системе (например, запущенный ранее)
         if os.name == "nt":
@@ -302,6 +313,29 @@ class WinBackend(Backend):
             except Exception:
                 return False
         return False
+
+    def explain(self, log=None):
+        """Выводит в лог причины остановки завершившихся winws-процессов.
+
+        Вызывается из «Статуса» периодически и после запуска: если процесс
+        упал сам (не был остановлен пользователем) — показывает код выхода и
+        хвост его лог-файла. Возвращает True, если что-то выведено.
+        """
+        reported = False
+        for info in self._proc_infos:
+            proc, path = info["proc"], info["log"]
+            if info.get("acked"):
+                continue
+            if proc.poll() is None:
+                continue
+            info["acked"] = True
+            reported = True
+            if log:
+                log(f"! winws завершился сам (код выхода: {proc.returncode})")
+                log(f"! лог: {path}")
+                for line in _tail(path):
+                    log("    " + line)
+        return reported
 
     def start(self, strategy: str, log=None) -> bool:
         self._log = log
@@ -325,30 +359,44 @@ class WinBackend(Backend):
             self._emit("! в стратегии не найдено команд winws")
             return False
 
+        self.logs_dir.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self._proc_infos = []
         self._emit(f"> запуск обхода ({strategy}), процессов: {len(cmds)}")
-        for args in cmds:
+        for idx, args in enumerate(cmds, 1):
+            logpath = self.logs_dir / f"winws-{idx}-{stamp}.log"
+            try:
+                fh = open(logpath, "a", encoding="utf-8", errors="replace")
+            except Exception as exc:
+                self._emit(f"! не открыть лог {logpath}: {exc}")
+                continue
             try:
                 proc = subprocess.Popen(
                     [str(w), *args],
                     cwd=str(self.strategies_dir),
+                    stdout=fh, stderr=subprocess.STDOUT,
                     creationflags=CREATE_NO_WINDOW,
                 )
-                self._procs.append(proc)
-                self._emit(f"> winws запущен (pid {proc.pid})")
             except Exception as exc:
+                fh.close()
                 self._emit(f"! ошибка запуска winws: {exc}")
+                continue
+            self._proc_infos.append({"proc": proc, "log": logpath, "acked": False})
+            self._emit(f"> winws {idx} запущен (pid {proc.pid}) — лог: {logpath.name}")
         return self.state()
 
     def stop(self, log=None) -> bool:
         self._log = log
         self._emit("> остановка обхода")
-        for proc in list(self._procs):
+        for info in self._proc_infos:
+            info["acked"] = True   # штатная остановка — причину не показываем
+            proc = info["proc"]
             if proc.poll() is None:
                 try:
                     proc.terminate()
                 except Exception:
                     pass
-        self._procs = []
+        self._proc_infos = []
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/IM", "winws.exe"],
                            capture_output=True, text=True, timeout=15,

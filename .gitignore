@@ -9,4 +9,5 @@ config.json
 .flowseal.zip
 .flowseal-src/
 release/
+logs/
 *.log
