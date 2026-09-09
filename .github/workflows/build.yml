@@ -1,0 +1,49 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установка зависимостей
+        run: |
+          pip install --upgrade pip
+          pip install -r gui/requirements.txt
+          pip install pyinstaller
+
+      - name: Smoke-импорты (без GUI)
+        run: python -c "import gui.app.window, gui.app.win_backend, gui.app.mock_backend; print('imports ok')"
+
+      - name: Сборка .exe (onedir)
+        run: python -m PyInstaller --clean --noconfirm gui.spec
+
+      - name: Упаковка
+        shell: bash
+        run: |
+          mkdir -p release
+          cp -r dist/ZapretGUI release/ZapretGUI
+          cd release
+          python -c "import zipfile,glob; z=zipfile.ZipFile('zapret-GUI-Windows.zip','w',zipfile.ZIP_DEFLATED); [z.write(p) for p in glob.glob('ZapretGUI/**/*',recursive=True)]; z.close()"
+
+      - name: Артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: zapret-GUI-Windows
+          path: release/zapret-GUI-Windows.zip
+
+      - name: Релиз (по тегу)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" release/zapret-GUI-Windows.zip -R ${{ github.repository }} --title "${{ github.ref_name }}" --notes "Windows-сборка GUI."

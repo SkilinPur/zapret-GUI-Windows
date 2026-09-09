@@ -1,0 +1,85 @@
+# =============================================================================
+# Системный трей: сворачивание окна в трей
+# =============================================================================
+# Автор GUI: SkilinPur (https://github.com/SkilinPur) | Репозиторий: https://github.com/SkilinPur/zapret-GUI
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+
+
+def make_icon():
+    """Иконка приложения: фиолетовая плашка с белой буквой Z."""
+    pm = QPixmap(64, 64)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#7C5CFC"))
+    p.drawRoundedRect(4, 4, 56, 56, 16, 16)
+
+    font = QFont()
+    font.setBold(True)
+    font.setPixelSize(34)
+    p.setFont(font)
+    p.setPen(QColor("#ffffff"))
+    p.drawText(pm.rect(), Qt.AlignCenter, "Z")
+    p.end()
+    return QIcon(pm)
+
+
+def make_led_icon(running=True):
+    """Иконка трея со светодиодом статуса: зелёный = работает, серый = остановлен."""
+    pm = QPixmap(64, 64)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor("#7C5CFC"))
+    p.drawRoundedRect(4, 4, 56, 56, 16, 16)
+
+    led = QColor("#66bb6a") if running else QColor("#616161")
+    p.setBrush(led)
+    p.drawEllipse(20, 20, 24, 24)
+    p.end()
+    return QIcon(pm)
+
+
+def install_tray(window):
+    """Создаёт иконку в системном трее с управлением zapret. Возвращает объект или None."""
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        return None
+
+    app = QApplication.instance()
+    tray = QSystemTrayIcon(make_led_icon(False), app)
+    tray.setToolTip("Zapret Discord YouTube")
+
+    # Быстрое управление zapret прямо из трея
+    tray.start_action = QAction("▶ Запустить zapret", tray)
+    tray.stop_action = QAction("⏹ Остановить zapret", tray)
+    tray.start_action.triggered.connect(window.tray_start_zapret)
+    tray.stop_action.triggered.connect(window.tray_stop_zapret)
+    tray.stop_action.setEnabled(False)
+
+    show_action = QAction("Показать окно", tray)
+    quit_action = QAction("Завершить программу", tray)
+    show_action.triggered.connect(window.show_from_tray)
+    quit_action.triggered.connect(window.quit_from_tray)
+
+    menu = QMenu()
+    menu.addAction(tray.start_action)
+    menu.addAction(tray.stop_action)
+    menu.addSeparator()
+    menu.addAction(show_action)
+    menu.addSeparator()
+    menu.addAction(quit_action)
+    tray.setContextMenu(menu)
+
+    def on_activated(reason):
+        # ЛКМ по иконке — меню с действиями (по правой кнопке меню и так видно)
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            menu.exec(QCursor.pos())
+
+    tray.activated.connect(on_activated)
+    tray.show()
+    return tray

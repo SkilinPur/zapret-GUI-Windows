@@ -5,4 +5,9 @@ build/
 dist/
 strategies/
 bin/
+config.json
+.flowseal.zip
+.flowseal-src/
 *.spec
+release/
+*.log
