@@ -27,16 +27,17 @@ jobs:
       - name: Smoke-импорты (без GUI)
         run: python -c "import gui.app.window, gui.app.win_backend, gui.app.mock_backend; print('imports ok')"
 
-      - name: Сборка .exe (onedir)
+      - name: Сборка .exe
         run: python -m PyInstaller --clean --noconfirm gui.spec
 
       - name: Упаковка
         shell: bash
         run: |
+          ls -la dist/
           mkdir -p release
-          cp -r dist/ZapretGUI release/ZapretGUI
+          cp dist/ZapretGUI.exe release/ZapretGUI.exe
           cd release
-          python -c "import zipfile,glob; z=zipfile.ZipFile('zapret-GUI-Windows.zip','w',zipfile.ZIP_DEFLATED); [z.write(p) for p in glob.glob('ZapretGUI/**/*',recursive=True)]; z.close()"
+          python -c "import zipfile,os; z=zipfile.ZipFile('zapret-GUI-Windows.zip','w',zipfile.ZIP_DEFLATED); z.write('ZapretGUI.exe'); z.close()"
 
       - name: Артефакт
         uses: actions/upload-artifact@v4
