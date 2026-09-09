@@ -112,6 +112,16 @@ class MockBackend(Backend):
     def autostart_state(self):
         return "off"
 
+    def check_sites(self, log=None):
+        if log:
+            log("✓ mock: YouTube и Discord отвечают")
+        return True
+
+    def clear_discord_cache(self, log=None):
+        if log:
+            log("> mock: кэш Discord очищен")
+        return True
+
     def autostart(self, enable, log=None):
         if log:
             log(f"> mock: автозапуск {'включён' if enable else 'выключен'}")

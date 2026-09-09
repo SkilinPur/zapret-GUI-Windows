@@ -51,6 +51,17 @@ class StatusTab(QWidget):
         bl.addWidget(self.stop_btn)
         bl.addStretch()
         cl.addWidget(btn_row)
+
+        srv_row = QWidget()
+        sl = QHBoxLayout(srv_row)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(10)
+        self.check_btn = make_button("🔎 Проверить YouTube/Discord")
+        self.discord_btn = make_button("🧹 Очистить кэш Discord")
+        sl.addWidget(self.check_btn)
+        sl.addWidget(self.discord_btn)
+        sl.addStretch()
+        cl.addWidget(srv_row)
         root.addWidget(card)
 
         log_card = make_card()
@@ -67,6 +78,8 @@ class StatusTab(QWidget):
 
         self.start_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
+        self.check_btn.clicked.connect(lambda: self._service(self.b.check_sites))
+        self.discord_btn.clicked.connect(lambda: self._service(self.b.clear_discord_cache))
 
     def _guard(self):
         if self._job and self._job.isRunning():
@@ -98,9 +111,19 @@ class StatusTab(QWidget):
         job.line.connect(self.append_log)
         job.finished.connect(lambda: self._done(btn))
 
+    def _service(self, func):
+        if self._guard():
+            return
+        self._busy(True)
+        self._job = JobThread(lambda log: func(log))
+        self._wire(self._job, None)
+        self._job.start()
+
     def _busy(self, busy):
         self.start_btn.setEnabled(not busy)
         self.stop_btn.setEnabled(not busy)
+        self.check_btn.setEnabled(not busy)
+        self.discord_btn.setEnabled(not busy)
 
     def _done(self, btn):
         self._job = None

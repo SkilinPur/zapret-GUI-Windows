@@ -8,7 +8,7 @@ import sys
 import ctypes
 from pathlib import Path
 
-APP_VERSION = "0.1.8"
+APP_VERSION = "0.1.9"
 GITHUB_REPO = "SkilinPur/zapret-GUI-Windows"
 GITHUB_URL = f"https://github.com/{GITHUB_REPO}"
 STRATEGIES_REPO = "Flowseal/zapret-discord-youtube"

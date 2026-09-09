@@ -426,6 +426,72 @@ class WinBackend(Backend):
         self._emit("> остановлен")
         return True
 
+    # ------------------------------------------------------------- самопроверка / сервис
+
+    def check_sites(self, log=None) -> bool:
+        """Проверяет доступность YouTube и Discord (простой HTTPS-запрос)."""
+        self._log = log
+        import time as _t
+        tests = [("YouTube", "https://www.youtube.com"),
+                 ("Discord", "https://discord.com")]
+        all_ok = True
+        for name, url in tests:
+            t0 = _t.time()
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent":
+                                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    code = resp.status
+                dt = _t.time() - t0
+                self._emit(f"✓ {name}: ответ {code} за {dt:.1f} с")
+            except Exception as exc:
+                dt = _t.time() - t0
+                all_ok = False
+                reason = getattr(exc, "reason", None) or exc
+                self._emit(f"✗ {name}: {reason} ({dt:.1f} с)")
+        self._emit("✓ сайты отвечают" if all_ok
+                   else "! не всё отвечает — попробуйте другой способ обхода")
+        return all_ok
+
+    def clear_discord_cache(self, log=None) -> bool:
+        """Очищает кэш Discord текущего пользователя (как clear_discord_cache)."""
+        self._log = log
+        subs = ("Cache", "Code Cache", "GPUCache", "DawnGraphiteCache",
+                "blob_storage")
+        cleared = 0
+        roots = []
+        for var in ("APPDATA", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                roots.append(Path(base) / "discord")
+        found_any = False
+        for root in roots:
+            if not root.is_dir():
+                continue
+            found_any = True
+            self._emit(f"> кэш Discord: {root}")
+            for sub in subs:
+                d = root / sub
+                if not d.is_dir():
+                    continue
+                for child in d.iterdir():
+                    try:
+                        if child.is_dir():
+                            import shutil as _sh
+                            _sh.rmtree(child, ignore_errors=True)
+                        else:
+                            child.unlink(missing_ok=True)
+                        cleared += 1
+                    except Exception:
+                        pass
+        if not found_any:
+            self._emit("! папка Discord не найдена (кэша нет)")
+            return False
+        self._emit(f"> очищено элементов кэша: {cleared}")
+        self._emit("> закройте и откройте Discord, если он запущен")
+        return True
+
     # ------------------------------------------------------------- автозапуск
 
     @staticmethod
