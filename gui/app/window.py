@@ -34,7 +34,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Zapret Discord YouTube — Windows")
         self.resize(920, 620)
         self.setWindowIcon(make_icon())
-        self._tray = install_tray(self)
+        try:
+            self._tray = install_tray(self)
+        except Exception:
+            self._tray = None
 
     def _build_ui(self):
         central = QWidget()
