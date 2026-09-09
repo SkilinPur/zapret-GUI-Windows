@@ -122,6 +122,39 @@ class MockBackend(Backend):
             log("> mock: кэш Discord очищен")
         return True
 
+    def telegram_installed(self):
+        return "v1.10.2 (mock)"
+
+    def telegram_latest(self):
+        return "v1.10.2"
+
+    def download_telegram(self, log=None):
+        if log:
+            log("> mock: Tg WS Proxy скачан")
+        return True
+
+    def telegram_running(self):
+        return getattr(self, "_tg", False)
+
+    def telegram_start(self, log=None):
+        self._tg = True
+        if log:
+            log("> mock: Tg WS Proxy запущен")
+        return True
+
+    def telegram_stop(self, log=None):
+        self._tg = False
+        if log:
+            log("> mock: Tg WS Proxy остановлен")
+        return True
+
+    def telegram_config(self):
+        return {"host": "127.0.0.1", "port": 1443,
+                "secret": "mocksecret"}
+
+    def telegram_connect_link(self):
+        return "tg://proxy?server=127.0.0.1&port=1443&secret=mocksecret"
+
     def autostart(self, enable, log=None):
         if log:
             log(f"> mock: автозапуск {'включён' if enable else 'выключен'}")

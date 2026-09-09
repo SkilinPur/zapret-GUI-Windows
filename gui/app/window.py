@@ -12,11 +12,13 @@ from .tray import install_tray, make_icon
 from .ui.config_tab import ConfigTab
 from .ui.help_tab import HelpTab
 from .ui.status_tab import StatusTab
+from .ui.telegram_tab import TelegramTab
 from .ui.update_tab import UpdateTab
 
 NAV_ITEMS = [
     ("🟢 Статус", StatusTab),
     ("⚙️ Способ обхода", ConfigTab),
+    ("✈️ Telegram", TelegramTab),
     ("⬆️ Обновление", UpdateTab),
     ("📖 Как пользоваться", HelpTab),
 ]

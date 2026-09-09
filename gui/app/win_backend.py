@@ -492,6 +492,104 @@ class WinBackend(Backend):
         self._emit("> закройте и откройте Discord, если он запущен")
         return True
 
+    # ------------------------------------------------------------- Telegram (Tg WS Proxy)
+
+    def _tg_exe(self) -> Path:
+        return self.root / "tgws" / "TgWsProxy.exe"
+
+    @staticmethod
+    def _tg_latest_tag():
+        try:
+            data = _http_json("https://api.github.com/repos/Flowseal/tg-ws-proxy/releases/latest")
+            return data.get("tag_name", "") or ""
+        except Exception:
+            return ""
+
+    def telegram_installed(self) -> str:
+        m = self.root / ".tgws-version"
+        return m.read_text(encoding="utf-8").strip() if m.exists() else ""
+
+    def telegram_latest(self) -> str:
+        return self._tg_latest_tag()
+
+    def download_telegram(self, log=None) -> bool:
+        self._log = log
+        tag = self._tg_latest_tag()
+        if not tag:
+            if log:
+                log("! не удалось определить версию Tg WS Proxy")
+            return False
+        url = (f"https://github.com/Flowseal/tg-ws-proxy/releases/download/"
+               f"{tag}/TgWsProxy_windows.exe")
+        try:
+            self._emit(f"> скачивание Tg WS Proxy {tag}…")
+            (self.root / "tgws").mkdir(exist_ok=True)
+            req = urllib.request.Request(url, headers=_AUTH_HEADERS)
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                self._tg_exe().write_bytes(resp.read())
+            (self.root / ".tgws-version").write_text(tag, encoding="utf-8")
+            self._emit(f"> Tg WS Proxy {tag} установлен")
+            return True
+        except Exception as exc:
+            if log:
+                log(f"! ошибка скачивания: {exc}")
+            return False
+
+    def telegram_running(self) -> bool:
+        if os.name != "nt":
+            return False
+        try:
+            p = subprocess.run(["tasklist", "/FI", "IMAGENAME eq TgWsProxy.exe"],
+                               capture_output=True, text=True, timeout=15,
+                               creationflags=CREATE_NO_WINDOW)
+            return "TgWsProxy.exe" in (p.stdout or "")
+        except Exception:
+            return False
+
+    def telegram_start(self, log=None) -> bool:
+        self._log = log
+        exe = self._tg_exe()
+        if not exe.exists():
+            self._emit("! Tg WS Proxy не скачан — вкладка «Обновление»/Telegram")
+            return False
+        if self.telegram_running():
+            self._emit("! Tg WS Proxy уже запущен")
+            return False
+        try:
+            subprocess.Popen([str(exe)])
+            self._emit("> запущен Tg WS Proxy (окно настроек)…")
+            return True
+        except Exception as exc:
+            self._emit(f"! ошибка запуска: {exc}")
+            return False
+
+    def telegram_stop(self, log=None) -> bool:
+        self._log = log
+        if os.name != "nt":
+            return False
+        subprocess.run(["taskkill", "/F", "/IM", "TgWsProxy.exe"],
+                       capture_output=True, text=True, timeout=15,
+                       creationflags=CREATE_NO_WINDOW)
+        self._emit("> Tg WS Proxy остановлен")
+        return True
+
+    def telegram_config(self) -> dict:
+        base = os.environ.get("APPDATA")
+        if not base:
+            return {}
+        cfg = Path(base) / "TgWsProxy" / "config.json"
+        return read_json(cfg)
+
+    def telegram_connect_link(self) -> str:
+        """tg://proxy-ссылка из конфига (host/port/secret)."""
+        cfg = self.telegram_config()
+        host = cfg.get("host", "127.0.0.1")
+        port = cfg.get("port", 1443)
+        secret = cfg.get("secret", "")
+        if not secret:
+            return ""
+        return f"tg://proxy?server={host}&port={port}&secret={secret}"
+
     # ------------------------------------------------------------- автозапуск
 
     @staticmethod
