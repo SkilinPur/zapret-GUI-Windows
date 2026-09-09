@@ -47,6 +47,20 @@ class MockBackend(Backend):
     def strategy_description(self, name):
         return self._mock_desc.get(name, "")
 
+    def game_filter_state(self):
+        return getattr(self, "_gf", "off")
+
+    def set_game_filter(self, mode):
+        self._gf = mode
+        return True
+
+    def ipset_state(self):
+        return getattr(self, "_ipset", "any")
+
+    def set_ipset(self, mode):
+        self._ipset = mode
+        return True
+
     def core_installed(self):
         return "v72.13 (mock)"
 

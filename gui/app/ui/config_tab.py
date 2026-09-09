@@ -8,6 +8,9 @@ from PySide6.QtWidgets import (
 
 from .widgets import add_row, make_button, make_card, make_title
 
+GF_LABELS = {"off": "Выкл", "all": "TCP и UDP", "tcp": "TCP", "udp": "UDP"}
+IPSET_LABELS = {"any": "Весь трафик", "none": "Только списки", "loaded": "По списку IP"}
+
 
 class ConfigTab(QWidget):
     def __init__(self, backend, parent=None):
@@ -54,6 +57,43 @@ class ConfigTab(QWidget):
         hint.setObjectName("statusMetaLabel")
         hint.setWordWrap(True)
         root.addWidget(hint)
+
+        # --- Дополнительные фильтры (как у Flowseal) --------------------
+        extra = make_card()
+        el = extra.layout()
+        ehead = QLabel("Дополнительные фильтры")
+        ehead.setObjectName("logHeader")
+        el.addWidget(ehead)
+
+        self.gf_combo = QComboBox()
+        for key, label in GF_LABELS.items():
+            self.gf_combo.addItem(label, key)
+        el.addWidget(add_row("GameFilter", self.gf_combo))
+        gf_hint = QLabel(
+            "Игровые порты 1024–65535 для TCP/UDP. Обычно выкл — включайте, "
+            "если игры/голос не работают при активном обходе."
+        )
+        gf_hint.setObjectName("statusMetaLabel")
+        gf_hint.setWordWrap(True)
+        el.addWidget(gf_hint)
+
+        self.ipset_combo = QComboBox()
+        for key, label in IPSET_LABELS.items():
+            self.ipset_combo.addItem(label, key)
+        el.addWidget(add_row("Охват (ipset)", self.ipset_combo))
+        ip_hint = QLabel(
+            "К каким адресам применять обход: весь трафик / только списки / "
+            "по полному списку IP."
+        )
+        ip_hint.setObjectName("statusMetaLabel")
+        ip_hint.setWordWrap(True)
+        el.addWidget(ip_hint)
+        root.addWidget(extra)
+
+        self.gf_combo.currentIndexChanged.connect(self._save_filters)
+        self.ipset_combo.currentIndexChanged.connect(self._save_filters)
+
+        self._load_filters()
         root.addStretch()
 
     def reload(self):
@@ -81,3 +121,26 @@ class ConfigTab(QWidget):
 
     def on_show(self):
         self.reload()
+        self._load_filters()
+
+    def _index_of(self, combo, key):
+        for i in range(combo.count()):
+            if combo.itemData(i) == key:
+                return i
+        return -1
+
+    def _load_filters(self):
+        self.gf_combo.blockSignals(True)
+        i = self._index_of(self.gf_combo, self.b.game_filter_state())
+        self.gf_combo.setCurrentIndex(i if i >= 0 else 0)
+        self.gf_combo.blockSignals(False)
+        self.ipset_combo.blockSignals(True)
+        i = self._index_of(self.ipset_combo, self.b.ipset_state())
+        self.ipset_combo.setCurrentIndex(i if i >= 0 else 0)
+        self.ipset_combo.blockSignals(False)
+
+    def _save_filters(self):
+        gf = self.gf_combo.currentData()
+        ip = self.ipset_combo.currentData()
+        self.b.set_game_filter(gf)
+        self.b.set_ipset(ip)

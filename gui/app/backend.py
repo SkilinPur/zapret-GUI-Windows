@@ -8,7 +8,7 @@ import sys
 import ctypes
 from pathlib import Path
 
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 GITHUB_REPO = "SkilinPur/zapret-GUI-Windows"
 GITHUB_URL = f"https://github.com/{GITHUB_REPO}"
 STRATEGIES_REPO = "Flowseal/zapret-discord-youtube"
@@ -47,6 +47,10 @@ class Backend:
     def save_strategy(self, name: str, log=None) -> bool: ...
     def strategies(self): ...
     def strategy_description(self, name: str) -> str: ...
+    def game_filter_state(self) -> str: ...          # off|all|tcp|udp
+    def set_game_filter(self, mode: str) -> bool: ...
+    def ipset_state(self) -> str: ...                # any|none|loaded
+    def set_ipset(self, mode: str) -> bool: ...
 
     # --- ядро (winws) ---
     def core_installed(self) -> str: ...          # версия или ""

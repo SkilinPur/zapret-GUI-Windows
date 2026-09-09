@@ -99,6 +99,81 @@ class WinBackend(Backend):
         p = self.engine / name
         return strategy_description_from_bat(p, name) if p.exists() else ""
 
+    # ------------------------------------------------------------- фильтры пакета
+
+    def _lists(self) -> Path:
+        return self.engine / "lists"
+
+    def _utils(self) -> Path:
+        return self.engine / "utils"
+
+    def game_filter_state(self) -> str:
+        """off | all | tcp | udp (как у Flowseal: utils/game_filter.enabled)."""
+        f = self._utils() / "game_filter.enabled"
+        try:
+            if not f.exists():
+                return "off"
+            val = f.read_text(encoding="utf-8", errors="replace").strip().lower()
+            return val if val in ("all", "tcp", "udp") else "off"
+        except Exception:
+            return "off"
+
+    def set_game_filter(self, mode: str) -> bool:
+        """mode: off | all | tcp | udp."""
+        if mode not in ("off", "all", "tcp", "udp"):
+            return False
+        try:
+            utils = self._utils()
+            utils.mkdir(parents=True, exist_ok=True)
+            f = utils / "game_filter.enabled"
+            if mode == "off":
+                f.unlink(missing_ok=True)
+            else:
+                f.write_text(mode + "\n", encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def ipset_state(self) -> str:
+        """any | none | loaded."""
+        f = self._lists() / "ipset-all.txt"
+        try:
+            if not f.exists():
+                return "any"
+            content = f.read_text(encoding="utf-8", errors="replace")
+            if not content.strip():
+                return "any"
+            if "203.0.113.113/32" in content:
+                return "none"
+            return "loaded"
+        except Exception:
+            return "any"
+
+    def set_ipset(self, mode: str) -> bool:
+        """mode: any | none | loaded (по схеме service.bat ipset_switch)."""
+        if mode not in ("any", "none", "loaded"):
+            return False
+        marker = "203.0.113.113/32\n"
+        try:
+            lists_dir = self._lists()
+            lists_dir.mkdir(parents=True, exist_ok=True)
+            f = lists_dir / "ipset-all.txt"
+            backup = lists_dir / "ipset-all.txt.backup"
+            if mode == "none":
+                if not backup.exists() and f.exists():
+                    f.rename(backup)
+                f.write_text(marker, encoding="utf-8")
+            elif mode == "any":
+                f.write_text("", encoding="utf-8")
+            else:  # loaded
+                if backup.exists():
+                    f.write_bytes(backup.read_bytes())
+                elif not f.exists():
+                    f.write_text("", encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
     # ------------------------------------------------------------- пакет Flowseal
 
     @staticmethod
